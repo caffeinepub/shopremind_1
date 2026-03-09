@@ -10,14 +10,14 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Link,
+  Loader2,
   LocateFixed,
   MapPin,
   Navigation,
   Plus,
   Trash2,
 } from "lucide-react";
-import { Loader2 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
   useAddStore,
@@ -25,6 +25,7 @@ import {
   useGetAllStores,
 } from "../hooks/useQueries";
 import type { Store } from "../hooks/useQueries";
+import type { ParsedMapLocation } from "../utils/parseGoogleMapsUrl";
 import { parseGoogleMapsUrl } from "../utils/parseGoogleMapsUrl";
 import { StoreSkeleton } from "./ItemSkeleton";
 
@@ -99,19 +100,43 @@ function AddStoreDialog() {
   } | null>(null);
   const [gpsLoading, setGpsLoading] = useState(false);
   const [gpsError, setGpsError] = useState<string | null>(null);
+  const [parsed, setParsed] = useState<ParsedMapLocation | null>(null);
+  const [isResolving, setIsResolving] = useState(false);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Keep a ref to `name` so we can read its latest value inside the effect
+  // without listing it as a dependency (it would retrigger parsing on every keystroke).
+  const nameRef = useRef(name);
+  nameRef.current = name;
   const addStore = useAddStore();
 
-  const parsed = mapsUrl.trim() ? parseGoogleMapsUrl(mapsUrl) : null;
-
-  const handleUrlChange = (url: string) => {
-    setMapsUrl(url);
-    if (!name.trim()) {
-      const p = parseGoogleMapsUrl(url);
-      if (p.placeName) {
-        setName(p.placeName);
-      }
+  // Async parse whenever mapsUrl changes
+  useEffect(() => {
+    if (!mapsUrl.trim()) {
+      setParsed(null);
+      setIsResolving(false);
+      return;
     }
-  };
+
+    // Debounce so we don't fire on every keystroke
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(async () => {
+      setIsResolving(true);
+      try {
+        const result = await parseGoogleMapsUrl(mapsUrl);
+        setParsed(result);
+        // Auto-fill name from place name if the name field is currently empty
+        if (result.placeName && !nameRef.current.trim()) {
+          setName(result.placeName);
+        }
+      } finally {
+        setIsResolving(false);
+      }
+    }, 400);
+
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, [mapsUrl]);
 
   const handleGetLocation = () => {
     setGpsError(null);
@@ -153,6 +178,7 @@ function AddStoreDialog() {
     name.trim() &&
     activeLat !== null &&
     activeLng !== null &&
+    !isResolving &&
     (locationMode === "link"
       ? parsed && !parsed.error && !parsed.isShortLink
       : true);
@@ -176,6 +202,7 @@ function AddStoreDialog() {
       toast.success(`"${name}" added to locations`);
       setName("");
       setMapsUrl("");
+      setParsed(null);
       setGpsCoords(null);
       setGpsError(null);
       setLocationMode("link");
@@ -242,28 +269,35 @@ function AddStoreDialog() {
                 <Label className="text-sm font-semibold">Google Maps URL</Label>
                 <Input
                   data-ocid="store.maps_url.input"
-                  placeholder="Paste a Google Maps link here…"
+                  placeholder="Paste any Google Maps link or coordinates…"
                   value={mapsUrl}
-                  onChange={(e) => handleUrlChange(e.target.value)}
+                  onChange={(e) => setMapsUrl(e.target.value)}
                   className="bg-background font-mono text-xs"
                   autoComplete="off"
                   autoCorrect="off"
                   spellCheck={false}
                 />
-                {/* Parsed preview */}
-                {parsed && (
+                {/* Resolved preview */}
+                {mapsUrl.trim() && (
                   <div
                     className={`text-xs px-3 py-2 rounded-lg font-medium ${
-                      parsed.isShortLink || parsed.error
-                        ? "bg-destructive/10 text-destructive"
-                        : parsed.latitude !== null
-                          ? "bg-primary/10 text-primary"
-                          : "bg-muted text-muted-foreground"
+                      isResolving
+                        ? "bg-muted text-muted-foreground"
+                        : parsed?.error || parsed?.isShortLink
+                          ? "bg-destructive/10 text-destructive"
+                          : parsed !== null && parsed.latitude !== null
+                            ? "bg-primary/10 text-primary"
+                            : "bg-muted text-muted-foreground"
                     }`}
                   >
-                    {parsed.isShortLink || parsed.error ? (
+                    {isResolving ? (
+                      <span className="flex items-center gap-1.5">
+                        <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />
+                        Resolving link…
+                      </span>
+                    ) : parsed?.error ? (
                       <span>{parsed.error}</span>
-                    ) : parsed.latitude !== null ? (
+                    ) : parsed !== null && parsed.latitude !== null ? (
                       <span className="flex items-center gap-1.5">
                         <Navigation className="h-3.5 w-3.5 shrink-0" />
                         {parsed.latitude.toFixed(6)},{" "}

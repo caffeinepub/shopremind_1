@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Link,
+  Loader2,
   LocateFixed,
   LogIn,
   Navigation,
@@ -18,8 +19,7 @@ import {
   ShoppingCart,
   Trash2,
 } from "lucide-react";
-import { Loader2 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Variant_pending_bought } from "../backend.d";
 import { useInternetIdentity } from "../hooks/useInternetIdentity";
@@ -32,6 +32,7 @@ import {
   useUpdateItemStatus,
 } from "../hooks/useQueries";
 import type { ShoppingItem, Store } from "../hooks/useQueries";
+import type { ParsedMapLocation } from "../utils/parseGoogleMapsUrl";
 import { parseGoogleMapsUrl } from "../utils/parseGoogleMapsUrl";
 import { ItemSkeleton } from "./ItemSkeleton";
 
@@ -148,22 +149,47 @@ function AddItemDialog({ stores }: { stores: Store[] }) {
   } | null>(null);
   const [gpsLoading, setGpsLoading] = useState(false);
   const [gpsError, setGpsError] = useState<string | null>(null);
+  const [parsed, setParsed] = useState<ParsedMapLocation | null>(null);
+  const [isResolving, setIsResolving] = useState(false);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Keep a ref to `storeName` so we can read its latest value inside the effect
+  // without listing it as a dependency (would retrigger parsing on every keystroke).
+  const storeNameRef = useRef(storeName);
+  storeNameRef.current = storeName;
   const addItem = useAddShoppingItem();
   const addStore = useAddStore();
   const { identity, isLoggingIn } = useInternetIdentity();
   const isSignedIn = !!identity;
 
-  const parsed = mapsUrl.trim() ? parseGoogleMapsUrl(mapsUrl) : null;
+  // Async parse whenever mapsUrl changes
+  useEffect(() => {
+    if (!mapsUrl.trim()) {
+      setParsed(null);
+      setIsResolving(false);
+      return;
+    }
+
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(async () => {
+      setIsResolving(true);
+      try {
+        const result = await parseGoogleMapsUrl(mapsUrl);
+        setParsed(result);
+        if (result.placeName && !storeNameRef.current.trim()) {
+          setStoreName(result.placeName);
+        }
+      } finally {
+        setIsResolving(false);
+      }
+    }, 400);
+
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, [mapsUrl]);
+
   const coordsOk =
     parsed && parsed.latitude !== null && !parsed.error && !parsed.isShortLink;
-
-  const handleUrlChange = (url: string) => {
-    setMapsUrl(url);
-    if (!storeName.trim()) {
-      const p = parseGoogleMapsUrl(url);
-      if (p.placeName) setStoreName(p.placeName);
-    }
-  };
 
   const handleGetLocation = () => {
     setGpsError(null);
@@ -208,6 +234,7 @@ function AddItemDialog({ stores }: { stores: Store[] }) {
     storeName.trim() &&
     activeLat !== null &&
     activeLng !== null &&
+    !isResolving &&
     (locationMode === "link" ? coordsOk : true);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -251,6 +278,7 @@ function AddItemDialog({ stores }: { stores: Store[] }) {
       setQuantity("");
       setStoreName("");
       setMapsUrl("");
+      setParsed(null);
       setGpsCoords(null);
       setGpsError(null);
       setLocationMode("link");
@@ -265,8 +293,6 @@ function AddItemDialog({ stores }: { stores: Store[] }) {
         msg.includes("session") ||
         msg.includes("expired")
       ) {
-        // Show a clear message and let the user sign in manually via the header button.
-        // Do NOT auto-open the login popup — the user should be in control of that.
         toast.error("Please sign in using the button in the top right.", {
           duration: 5000,
         });
@@ -394,26 +420,33 @@ function AddItemDialog({ stores }: { stores: Store[] }) {
               <>
                 <Input
                   data-ocid="item.store_url.input"
-                  placeholder="Paste a Google Maps link for the store…"
+                  placeholder="Paste any Google Maps link or coordinates…"
                   value={mapsUrl}
-                  onChange={(e) => handleUrlChange(e.target.value)}
+                  onChange={(e) => setMapsUrl(e.target.value)}
                   className="bg-background font-mono text-xs"
                   autoComplete="off"
                   autoCorrect="off"
                   spellCheck={false}
                   disabled={!isSignedIn}
                 />
-                {parsed && (
+                {mapsUrl.trim() && (
                   <div
                     className={`text-xs px-3 py-2 rounded-lg font-medium ${
-                      parsed.isShortLink || parsed.error
-                        ? "bg-destructive/10 text-destructive"
-                        : coordsOk
-                          ? "bg-primary/10 text-primary"
-                          : "bg-muted text-muted-foreground"
+                      isResolving
+                        ? "bg-muted text-muted-foreground"
+                        : parsed?.error || parsed?.isShortLink
+                          ? "bg-destructive/10 text-destructive"
+                          : coordsOk
+                            ? "bg-primary/10 text-primary"
+                            : "bg-muted text-muted-foreground"
                     }`}
                   >
-                    {parsed.isShortLink || parsed.error ? (
+                    {isResolving ? (
+                      <span className="flex items-center gap-1.5">
+                        <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />
+                        Resolving link…
+                      </span>
+                    ) : parsed?.error ? (
                       <span>{parsed.error}</span>
                     ) : coordsOk ? (
                       <span className="flex items-center gap-1.5">

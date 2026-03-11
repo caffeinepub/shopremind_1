@@ -131,7 +131,7 @@ function AddStoreDialog() {
       } finally {
         setIsResolving(false);
       }
-    }, 400);
+    }, 300);
 
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
@@ -180,7 +180,7 @@ function AddStoreDialog() {
     activeLng !== null &&
     !isResolving &&
     (locationMode === "link"
-      ? parsed && !parsed.error && !parsed.isShortLink
+      ? parsed && !parsed.error && parsed.latitude !== null
       : true);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -283,7 +283,10 @@ function AddStoreDialog() {
                     className={`text-xs px-3 py-2 rounded-lg font-medium ${
                       isResolving
                         ? "bg-muted text-muted-foreground"
-                        : parsed?.error || parsed?.isShortLink
+                        : parsed?.error ||
+                            (parsed !== null &&
+                              parsed.latitude === null &&
+                              !isResolving)
                           ? "bg-destructive/10 text-destructive"
                           : parsed !== null && parsed.latitude !== null
                             ? "bg-primary/10 text-primary"

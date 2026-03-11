@@ -22,6 +22,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Variant_pending_bought } from "../backend.d";
+import { useActor } from "../hooks/useActor";
 import { useInternetIdentity } from "../hooks/useInternetIdentity";
 import {
   useAddShoppingItem,
@@ -152,13 +153,15 @@ function AddItemDialog({ stores }: { stores: Store[] }) {
   const [parsed, setParsed] = useState<ParsedMapLocation | null>(null);
   const [isResolving, setIsResolving] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Keep a ref to `storeName` so we can read its latest value inside the effect
-  // without listing it as a dependency (would retrigger parsing on every keystroke).
   const storeNameRef = useRef(storeName);
   storeNameRef.current = storeName;
   const addItem = useAddShoppingItem();
   const addStore = useAddStore();
   const { identity, isLoggingIn } = useInternetIdentity();
+  // Check actor readiness so we don't submit before the authenticated actor is ready.
+  // This prevents the "please sign in" error when the actor is still initializing
+  // immediately after login.
+  const { isFetching: actorFetching } = useActor();
   const isSignedIn = !!identity;
 
   // Async parse whenever mapsUrl changes
@@ -181,15 +184,14 @@ function AddItemDialog({ stores }: { stores: Store[] }) {
       } finally {
         setIsResolving(false);
       }
-    }, 400);
+    }, 300);
 
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
   }, [mapsUrl]);
 
-  const coordsOk =
-    parsed && parsed.latitude !== null && !parsed.error && !parsed.isShortLink;
+  const coordsOk = parsed && parsed.latitude !== null && !parsed.error;
 
   const handleGetLocation = () => {
     setGpsError(null);
@@ -227,8 +229,11 @@ function AddItemDialog({ stores }: { stores: Store[] }) {
       ? (parsed?.longitude ?? null)
       : (gpsCoords?.lng ?? null);
 
+  // Require actor to be ready (!actorFetching) so we don't hit
+  // the backend with an anonymous actor right after login.
   const canSubmit =
     isSignedIn &&
+    !actorFetching &&
     name.trim() &&
     quantity.trim() &&
     storeName.trim() &&
@@ -247,7 +252,6 @@ function AddItemDialog({ stores }: { stores: Store[] }) {
         : `${activeLat.toFixed(6)}, ${activeLng.toFixed(6)}`;
 
     try {
-      // Reuse existing store with same coords if already saved, otherwise create one
       const existingStore = stores.find(
         (s) =>
           Math.abs(s.latitude - activeLat) < 0.0001 &&
@@ -293,10 +297,10 @@ function AddItemDialog({ stores }: { stores: Store[] }) {
         msg.includes("session") ||
         msg.includes("expired")
       ) {
-        toast.error("Please sign in using the button in the top right.", {
-          duration: 5000,
-        });
-        setOpen(false);
+        toast.error(
+          "Session issue detected. Please sign out and sign in again.",
+          { duration: 5000 },
+        );
       } else if (msg.includes("Store does not exist")) {
         toast.error("Store could not be saved. Please try again.");
       } else {
@@ -327,7 +331,7 @@ function AddItemDialog({ stores }: { stores: Store[] }) {
           </DialogTitle>
         </DialogHeader>
 
-        {/* Sign-in banner — shown when not authenticated */}
+        {/* Sign-in banner */}
         {!isSignedIn && (
           <div
             data-ocid="item.auth.panel"
@@ -345,6 +349,14 @@ function AddItemDialog({ stores }: { stores: Store[] }) {
             {isLoggingIn && (
               <Loader2 className="h-4 w-4 animate-spin text-primary shrink-0 mt-0.5" />
             )}
+          </div>
+        )}
+
+        {/* Connecting indicator — shown when signed in but actor not ready yet */}
+        {isSignedIn && actorFetching && (
+          <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-muted mt-2">
+            <Loader2 className="h-4 w-4 animate-spin text-primary shrink-0" />
+            <p className="text-xs text-muted-foreground">Connecting…</p>
           </div>
         )}
 
@@ -434,7 +446,10 @@ function AddItemDialog({ stores }: { stores: Store[] }) {
                     className={`text-xs px-3 py-2 rounded-lg font-medium ${
                       isResolving
                         ? "bg-muted text-muted-foreground"
-                        : parsed?.error || parsed?.isShortLink
+                        : parsed?.error ||
+                            (parsed !== null &&
+                              parsed.latitude === null &&
+                              !isResolving)
                           ? "bg-destructive/10 text-destructive"
                           : coordsOk
                             ? "bg-primary/10 text-primary"
@@ -521,6 +536,11 @@ function AddItemDialog({ stores }: { stores: Store[] }) {
               <>
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                 Adding…
+              </>
+            ) : actorFetching && isSignedIn ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Connecting…
               </>
             ) : (
               "Add to List"

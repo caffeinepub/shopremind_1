@@ -109,7 +109,7 @@ function AppShell() {
               />
             </div>
             <span className="font-display font-black text-xl tracking-tight text-foreground">
-              Nearbuy
+              MemoMap
             </span>
           </div>
           <div className="flex items-center gap-2">

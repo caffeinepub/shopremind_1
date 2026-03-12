@@ -136,6 +136,7 @@
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     overscroll-behavior: none;
+    -webkit-overflow-scrolling: touch;
   }
 
   h1, h2, h3, h4, h5, h6 {
@@ -146,6 +147,9 @@
 
 @layer utilities {
   /* Safe area helpers */
+  .pt-safe-top {
+    padding-top: env(safe-area-inset-top, 0px);
+  }
   .pb-safe {
     padding-bottom: env(safe-area-inset-bottom, 0px);
   }

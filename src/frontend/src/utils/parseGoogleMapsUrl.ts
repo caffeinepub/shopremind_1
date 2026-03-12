@@ -144,7 +144,6 @@ function extractCoordsFromHtml(
   body: string,
   finalUrl: string,
 ): { lat: number; lng: number; placeName: string | null } | null {
-  // 1. From the resolved final URL
   if (finalUrl) {
     const fromUrl = extractCoordsFromString(finalUrl);
     if (fromUrl) {
@@ -156,7 +155,6 @@ function extractCoordsFromHtml(
     }
   }
 
-  // 2. og:url meta tag
   const ogUrlMatch =
     body.match(
       /<meta[^>]+property=["']og:url["'][^>]+content=["']([^"']+)["']/i,
@@ -174,7 +172,6 @@ function extractCoordsFromHtml(
       };
   }
 
-  // 3. Canonical link tag
   const canonicalMatch =
     body.match(/<link[^>]+rel=["']canonical["'][^>]+href=["']([^"']+)["']/i) ||
     body.match(/<link[^>]+href=["']([^"']+)["'][^>]+rel=["']canonical["']/i);
@@ -189,7 +186,6 @@ function extractCoordsFromHtml(
       };
   }
 
-  // 4. JSON-LD structured data with GeoCoordinates
   const jsonLdMatches = [
     ...body.matchAll(
       /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi,
@@ -214,7 +210,6 @@ function extractCoordsFromHtml(
     }
   }
 
-  // 5. Google embeds coordinates in JS arrays like [null,null,LAT,LNG]
   const jsCoordPattern =
     /[\[,]\s*(-?(?:90|[1-8]?\d)\.\d{4,})\s*,\s*(-?(?:180|1[0-7]\d|[1-9]?\d)\.\d{4,})\s*[,\]]/g;
   for (const m of [...body.matchAll(jsCoordPattern)]) {
@@ -225,7 +220,6 @@ function extractCoordsFromHtml(
     }
   }
 
-  // 6. JSON key patterns: "lat":40.7128,"lng":-74.006
   const jsonLatLng = body.match(
     /["'](?:lat(?:itude)?)["']\s*:\s*(-?\d+\.\d+)[\s\S]{0,30}?["'](?:lng|lon(?:g(?:itude)?)?)["']\s*:\s*(-?\d+\.\d+)/i,
   );
@@ -237,7 +231,6 @@ function extractCoordsFromHtml(
     }
   }
 
-  // 7. Meta refresh redirect
   const metaRefreshMatch = body.match(/content=["'][^"']*url=([^"'&\s]+)/i);
   if (metaRefreshMatch) {
     const redirectUrl = decodeURIComponent(metaRefreshMatch[1]);
@@ -250,7 +243,6 @@ function extractCoordsFromHtml(
       };
   }
 
-  // 8. JavaScript redirect patterns
   for (const pattern of [
     /window\.location(?:\.href)?\s*=\s*["']([^"']+)["']/,
     /location\.replace\(["']([^"']+)["']\)/,
@@ -268,7 +260,6 @@ function extractCoordsFromHtml(
     }
   }
 
-  // 9. Scan body for embedded Google Maps URLs
   for (const u of body.match(
     /https:\/\/(?:www\.|maps\.)?google\.com\/maps[^\s"'<>\\)]+/g,
   ) || []) {
@@ -281,7 +272,6 @@ function extractCoordsFromHtml(
       };
   }
 
-  // 10. Direct coordinate scan in body
   const coords = extractCoordsFromString(body);
   if (coords)
     return {
@@ -350,6 +340,18 @@ function parseFullUrl(url: string): ParsedMapLocation {
   }
 }
 
+/**
+ * Create a fetch with a timeout that works across all browsers/platforms,
+ * including iOS < 16.4 which doesn't support AbortSignal.timeout().
+ */
+function fetchWithTimeout(url: string, timeoutMs: number): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  return fetch(url, { signal: controller.signal }).finally(() =>
+    clearTimeout(timer),
+  );
+}
+
 async function resolveShortLink(shortUrl: string): Promise<ParsedMapLocation> {
   const TIMEOUT = 15000;
 
@@ -366,9 +368,9 @@ async function resolveShortLink(shortUrl: string): Promise<ParsedMapLocation> {
     needsManualEntry: false,
   });
 
-  const unshortenMe = fetch(
+  const unshortenMe = fetchWithTimeout(
     `https://unshorten.me/api/v1/unshorten?url=${encodeURIComponent(shortUrl)}`,
-    { signal: AbortSignal.timeout(TIMEOUT) },
+    TIMEOUT,
   ).then(async (res) => {
     if (!res.ok) throw new Error(`unshorten.me ${res.status}`);
     const json = (await res.json()) as {
@@ -382,9 +384,9 @@ async function resolveShortLink(shortUrl: string): Promise<ParsedMapLocation> {
     return makeResult(coords.lat, coords.lng, extractPlaceName(resolvedUrl));
   });
 
-  const allOrigins = fetch(
+  const allOrigins = fetchWithTimeout(
     `https://api.allorigins.win/get?url=${encodeURIComponent(shortUrl)}`,
-    { signal: AbortSignal.timeout(TIMEOUT) },
+    TIMEOUT,
   ).then(async (res) => {
     if (!res.ok) throw new Error(`allorigins ${res.status}`);
     const json = (await res.json()) as {
@@ -399,9 +401,9 @@ async function resolveShortLink(shortUrl: string): Promise<ParsedMapLocation> {
     return makeResult(found.lat, found.lng, found.placeName);
   });
 
-  const allOriginsRaw = fetch(
+  const allOriginsRaw = fetchWithTimeout(
     `https://api.allorigins.win/raw?url=${encodeURIComponent(shortUrl)}`,
-    { signal: AbortSignal.timeout(TIMEOUT) },
+    TIMEOUT,
   ).then(async (res) => {
     const body = await res.text();
     const found = extractCoordsFromHtml(body, res.url || "");
@@ -409,9 +411,9 @@ async function resolveShortLink(shortUrl: string): Promise<ParsedMapLocation> {
     return makeResult(found.lat, found.lng, found.placeName);
   });
 
-  const corsProxy = fetch(
+  const corsProxy = fetchWithTimeout(
     `https://corsproxy.io/?${encodeURIComponent(shortUrl)}`,
-    { signal: AbortSignal.timeout(TIMEOUT) },
+    TIMEOUT,
   ).then(async (res) => {
     const body = await res.text();
     const found = extractCoordsFromHtml(body, res.url || "");
@@ -419,9 +421,9 @@ async function resolveShortLink(shortUrl: string): Promise<ParsedMapLocation> {
     return makeResult(found.lat, found.lng, found.placeName);
   });
 
-  const codetabs = fetch(
+  const codetabs = fetchWithTimeout(
     `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(shortUrl)}`,
-    { signal: AbortSignal.timeout(TIMEOUT) },
+    TIMEOUT,
   ).then(async (res) => {
     if (!res.ok) throw new Error(`codetabs ${res.status}`);
     const body = await res.text();
@@ -430,9 +432,9 @@ async function resolveShortLink(shortUrl: string): Promise<ParsedMapLocation> {
     return makeResult(found.lat, found.lng, found.placeName);
   });
 
-  const thingProxy = fetch(
+  const thingProxy = fetchWithTimeout(
     `https://thingproxy.freeboard.io/fetch/${shortUrl}`,
-    { signal: AbortSignal.timeout(TIMEOUT) },
+    TIMEOUT,
   ).then(async (res) => {
     if (!res.ok) throw new Error(`thingproxy ${res.status}`);
     const body = await res.text();
@@ -441,9 +443,9 @@ async function resolveShortLink(shortUrl: string): Promise<ParsedMapLocation> {
     return makeResult(found.lat, found.lng, found.placeName);
   });
 
-  const workersProxy = fetch(
+  const workersProxy = fetchWithTimeout(
     `https://corsproxy.org/?url=${encodeURIComponent(shortUrl)}`,
-    { signal: AbortSignal.timeout(TIMEOUT) },
+    TIMEOUT,
   ).then(async (res) => {
     const body = await res.text();
     const found = extractCoordsFromHtml(body, res.url || "");
@@ -469,7 +471,7 @@ async function resolveShortLink(shortUrl: string): Promise<ParsedMapLocation> {
       isShortLink: true,
       needsManualEntry: true,
       error:
-        "Could not auto-read this link. Please enter the coordinates manually below (you can find them by opening the link in your browser), or use 'My Location' while standing at the store.",
+        "Could not auto-read this link. Please enter the coordinates manually below, or use 'My Location' while standing at the store.",
     };
   }
 }

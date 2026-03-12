@@ -46,6 +46,24 @@ const FILTER_LABELS: { key: FilterType; label: string }[] = [
   { key: "bought", label: "Bought" },
 ];
 
+function parseManualCoords(input: string): { lat: number; lng: number } | null {
+  const parts = input.split(",");
+  if (parts.length < 2) return null;
+  const lat = Number.parseFloat(parts[0].trim());
+  const lng = Number.parseFloat(parts[1].trim());
+  if (
+    Number.isNaN(lat) ||
+    Number.isNaN(lng) ||
+    lat < -90 ||
+    lat > 90 ||
+    lng < -180 ||
+    lng > 180
+  ) {
+    return null;
+  }
+  return { lat, lng };
+}
+
 interface ItemCardProps {
   item: ShoppingItem;
   store: Store | undefined;
@@ -152,20 +170,26 @@ function AddItemDialog({ stores }: { stores: Store[] }) {
   const [gpsError, setGpsError] = useState<string | null>(null);
   const [parsed, setParsed] = useState<ParsedMapLocation | null>(null);
   const [isResolving, setIsResolving] = useState(false);
+  const [manualCoordsInput, setManualCoordsInput] = useState("");
+  const [manualParsed, setManualParsed] = useState<{
+    lat: number;
+    lng: number;
+  } | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const storeNameRef = useRef(storeName);
   storeNameRef.current = storeName;
   const addItem = useAddShoppingItem();
   const addStore = useAddStore();
   const { identity, isLoggingIn } = useInternetIdentity();
-  // Check actor readiness so we don't submit before the authenticated actor is ready.
-  // This prevents the "please sign in" error when the actor is still initializing
-  // immediately after login.
   const { isFetching: actorFetching } = useActor();
   const isSignedIn = !!identity;
 
   // Async parse whenever mapsUrl changes
   useEffect(() => {
+    // Reset manual entry when link changes
+    setManualCoordsInput("");
+    setManualParsed(null);
+
     if (!mapsUrl.trim()) {
       setParsed(null);
       setIsResolving(false);
@@ -191,7 +215,23 @@ function AddItemDialog({ stores }: { stores: Store[] }) {
     };
   }, [mapsUrl]);
 
-  const coordsOk = parsed && parsed.latitude !== null && !parsed.error;
+  const handleManualCoordsChange = (val: string) => {
+    setManualCoordsInput(val);
+    const coords = parseManualCoords(val);
+    setManualParsed(coords);
+  };
+
+  // Use manualParsed when needsManualEntry is true and manual coords were entered
+  const effectiveLinkCoords =
+    parsed?.needsManualEntry && manualParsed
+      ? manualParsed
+      : parsed?.latitude !== null && parsed?.latitude !== undefined
+        ? { lat: parsed.latitude, lng: parsed.longitude! }
+        : null;
+
+  const coordsOk = !parsed?.needsManualEntry
+    ? parsed && parsed.latitude !== null && !parsed.error
+    : manualParsed !== null;
 
   const handleGetLocation = () => {
     setGpsError(null);
@@ -222,15 +262,13 @@ function AddItemDialog({ stores }: { stores: Store[] }) {
 
   const activeLat =
     locationMode === "link"
-      ? (parsed?.latitude ?? null)
+      ? (effectiveLinkCoords?.lat ?? null)
       : (gpsCoords?.lat ?? null);
   const activeLng =
     locationMode === "link"
-      ? (parsed?.longitude ?? null)
+      ? (effectiveLinkCoords?.lng ?? null)
       : (gpsCoords?.lng ?? null);
 
-  // Require actor to be ready (!actorFetching) so we don't hit
-  // the backend with an anonymous actor right after login.
   const canSubmit =
     isSignedIn &&
     !actorFetching &&
@@ -286,6 +324,8 @@ function AddItemDialog({ stores }: { stores: Store[] }) {
       setGpsCoords(null);
       setGpsError(null);
       setLocationMode("link");
+      setManualCoordsInput("");
+      setManualParsed(null);
       setOpen(false);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -352,7 +392,7 @@ function AddItemDialog({ stores }: { stores: Store[] }) {
           </div>
         )}
 
-        {/* Connecting indicator — shown when signed in but actor not ready yet */}
+        {/* Connecting indicator */}
         {isSignedIn && actorFetching && (
           <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-muted mt-2">
             <Loader2 className="h-4 w-4 animate-spin text-primary shrink-0" />
@@ -446,14 +486,13 @@ function AddItemDialog({ stores }: { stores: Store[] }) {
                     className={`text-xs px-3 py-2 rounded-lg font-medium ${
                       isResolving
                         ? "bg-muted text-muted-foreground"
-                        : parsed?.error ||
-                            (parsed !== null &&
-                              parsed.latitude === null &&
-                              !isResolving)
-                          ? "bg-destructive/10 text-destructive"
-                          : coordsOk
-                            ? "bg-primary/10 text-primary"
-                            : "bg-muted text-muted-foreground"
+                        : parsed?.needsManualEntry
+                          ? "bg-amber-500/10 text-amber-700 dark:text-amber-400"
+                          : parsed?.error
+                            ? "bg-destructive/10 text-destructive"
+                            : coordsOk
+                              ? "bg-primary/10 text-primary"
+                              : "bg-muted text-muted-foreground"
                     }`}
                   >
                     {isResolving ? (
@@ -461,15 +500,62 @@ function AddItemDialog({ stores }: { stores: Store[] }) {
                         <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />
                         Resolving link…
                       </span>
+                    ) : parsed?.needsManualEntry ? (
+                      <span>
+                        Could not read this link automatically. Enter
+                        coordinates below, or use the &quot;My Location&quot;
+                        button while at the store.
+                      </span>
                     ) : parsed?.error ? (
                       <span>{parsed.error}</span>
                     ) : coordsOk ? (
                       <span className="flex items-center gap-1.5">
                         <Navigation className="h-3.5 w-3.5 shrink-0" />
-                        {parsed.latitude!.toFixed(6)},{" "}
-                        {parsed.longitude!.toFixed(6)}
+                        {parsed!.latitude!.toFixed(6)},{" "}
+                        {parsed!.longitude!.toFixed(6)}
                       </span>
                     ) : null}
+                  </div>
+                )}
+
+                {/* Manual coordinate entry — shown when auto-resolve fails */}
+                {parsed?.needsManualEntry && (
+                  <div className="space-y-1.5 pt-1">
+                    <Label className="text-xs font-semibold text-muted-foreground">
+                      Enter coordinates manually (e.g. 40.7128, -74.0060):
+                    </Label>
+                    <Input
+                      data-ocid="item.manual_coords.input"
+                      placeholder="latitude, longitude"
+                      value={manualCoordsInput}
+                      onChange={(e) => handleManualCoordsChange(e.target.value)}
+                      className="bg-background font-mono text-xs"
+                      autoComplete="off"
+                      autoCorrect="off"
+                      spellCheck={false}
+                      disabled={!isSignedIn}
+                    />
+                    {manualCoordsInput.trim() && (
+                      <div
+                        className={`text-xs px-3 py-2 rounded-lg font-medium ${
+                          manualParsed
+                            ? "bg-primary/10 text-primary"
+                            : "bg-destructive/10 text-destructive"
+                        }`}
+                      >
+                        {manualParsed ? (
+                          <span className="flex items-center gap-1.5">
+                            <Navigation className="h-3.5 w-3.5 shrink-0" />
+                            {manualParsed.lat.toFixed(6)},{" "}
+                            {manualParsed.lng.toFixed(6)}
+                          </span>
+                        ) : (
+                          <span>
+                            Invalid coordinates. Use format: 40.7128, -74.0060
+                          </span>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
               </>

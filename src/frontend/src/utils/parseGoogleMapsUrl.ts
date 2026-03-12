@@ -4,6 +4,7 @@ export interface ParsedMapLocation {
   placeName: string | null;
   isShortLink: boolean;
   error: string | null;
+  needsManualEntry?: boolean;
 }
 
 const empty = (): ParsedMapLocation => ({
@@ -12,104 +13,116 @@ const empty = (): ParsedMapLocation => ({
   placeName: null,
   isShortLink: false,
   error: null,
+  needsManualEntry: false,
 });
 
-/** Detect plain coordinate pair "40.7128,-74.0060" */
 function isPlainCoords(input: string): boolean {
   return /^-?\d+\.?\d*,\s*-?\d+\.?\d*$/.test(input.trim());
 }
 
-/** Extract coordinates using all known Google Maps URL patterns */
 function extractCoordsFromString(
   text: string,
 ): { lat: number; lng: number } | null {
-  // @lat,lng format (most common in full URLs)
-  const atMatch = text.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
-  if (atMatch)
-    return {
-      lat: Number.parseFloat(atMatch[1]),
-      lng: Number.parseFloat(atMatch[2]),
-    };
+  const d3dMatch = text.match(/!3d(-?\d+\.?\d*)!4d(-?\d+\.?\d*)/);
+  if (d3dMatch) {
+    const lat = Number.parseFloat(d3dMatch[1]);
+    const lng = Number.parseFloat(d3dMatch[2]);
+    if (isValidLatLng(lat, lng)) return { lat, lng };
+  }
 
-  // !3d{lat}!4d{lng} format (mobile share links data param)
-  const d3dMatch = text.match(/!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/);
-  if (d3dMatch)
-    return {
-      lat: Number.parseFloat(d3dMatch[1]),
-      lng: Number.parseFloat(d3dMatch[2]),
-    };
+  const d8mMatch = text.match(/!8m2!3d(-?\d+\.?\d*)!4d(-?\d+\.?\d*)/);
+  if (d8mMatch) {
+    const lat = Number.parseFloat(d8mMatch[1]);
+    const lng = Number.parseFloat(d8mMatch[2]);
+    if (isValidLatLng(lat, lng)) return { lat, lng };
+  }
 
-  // !4d{lng} followed anywhere by !3d{lat} (reversed order)
-  const d4dMatch = text.match(/!4d(-?\d+\.\d+).*?!3d(-?\d+\.\d+)/);
-  if (d4dMatch)
-    return {
-      lng: Number.parseFloat(d4dMatch[1]),
-      lat: Number.parseFloat(d4dMatch[2]),
-    };
+  const d4dFirst = text.match(/!4d(-?\d+\.?\d*).*?!3d(-?\d+\.?\d*)/);
+  if (d4dFirst) {
+    const lng = Number.parseFloat(d4dFirst[1]);
+    const lat = Number.parseFloat(d4dFirst[2]);
+    if (isValidLatLng(lat, lng)) return { lat, lng };
+  }
 
-  // /maps/@lat,lng or /maps/place/Name/@lat,lng
-  const pathMatch = text.match(
-    /\/maps\/(?:place\/[^/]+\/)?@(-?\d+\.\d+),(-?\d+\.\d+)/,
+  const atMatch = text.match(/@(-?\d+\.?\d*),(-?\d+\.?\d*)/);
+  if (atMatch) {
+    const lat = Number.parseFloat(atMatch[1]);
+    const lng = Number.parseFloat(atMatch[2]);
+    if (isValidLatLng(lat, lng)) return { lat, lng };
+  }
+
+  const pathAtMatch = text.match(
+    /\/maps\/(?:[^/]+\/)*@(-?\d+\.?\d*),(-?\d+\.?\d*)/,
   );
-  if (pathMatch)
-    return {
-      lat: Number.parseFloat(pathMatch[1]),
-      lng: Number.parseFloat(pathMatch[2]),
-    };
+  if (pathAtMatch) {
+    const lat = Number.parseFloat(pathAtMatch[1]);
+    const lng = Number.parseFloat(pathAtMatch[2]);
+    if (isValidLatLng(lat, lng)) return { lat, lng };
+  }
 
-  // destination=lat,lng or origin=lat,lng or query=lat,lng or q=lat,lng
   const destMatch = text.match(
-    /[?&](?:destination|origin|query|q)=(-?\d+\.\d+),(-?\d+\.\d+)/,
+    /[?&](?:destination|origin|query|q)=(-?\d+\.?\d*),(-?\d+\.?\d*)/,
   );
-  if (destMatch)
-    return {
-      lat: Number.parseFloat(destMatch[1]),
-      lng: Number.parseFloat(destMatch[2]),
-    };
+  if (destMatch) {
+    const lat = Number.parseFloat(destMatch[1]);
+    const lng = Number.parseFloat(destMatch[2]);
+    if (isValidLatLng(lat, lng)) return { lat, lng };
+  }
 
-  // ll=lat,lng
-  const llMatch = text.match(/[?&]ll=(-?\d+\.\d+),(-?\d+\.\d+)/);
-  if (llMatch)
-    return {
-      lat: Number.parseFloat(llMatch[1]),
-      lng: Number.parseFloat(llMatch[2]),
-    };
+  const llMatch = text.match(/[?&]ll=(-?\d+\.?\d*),(-?\d+\.?\d*)/);
+  if (llMatch) {
+    const lat = Number.parseFloat(llMatch[1]);
+    const lng = Number.parseFloat(llMatch[2]);
+    if (isValidLatLng(lat, lng)) return { lat, lng };
+  }
 
-  // center=lat,lng
-  const centerMatch = text.match(/[?&]center=(-?\d+\.\d+),(-?\d+\.\d+)/);
-  if (centerMatch)
-    return {
-      lat: Number.parseFloat(centerMatch[1]),
-      lng: Number.parseFloat(centerMatch[2]),
-    };
+  const centerMatch = text.match(/[?&]center=(-?\d+\.?\d*),(-?\d+\.?\d*)/);
+  if (centerMatch) {
+    const lat = Number.parseFloat(centerMatch[1]);
+    const lng = Number.parseFloat(centerMatch[2]);
+    if (isValidLatLng(lat, lng)) return { lat, lng };
+  }
 
-  // sll=lat,lng (older maps format)
-  const sllMatch = text.match(/[?&]sll=(-?\d+\.\d+),(-?\d+\.\d+)/);
-  if (sllMatch)
-    return {
-      lat: Number.parseFloat(sllMatch[1]),
-      lng: Number.parseFloat(sllMatch[2]),
-    };
+  const sllMatch = text.match(/[?&]sll=(-?\d+\.?\d*),(-?\d+\.?\d*)/);
+  if (sllMatch) {
+    const lat = Number.parseFloat(sllMatch[1]);
+    const lng = Number.parseFloat(sllMatch[2]);
+    if (isValidLatLng(lat, lng)) return { lat, lng };
+  }
 
-  // coords in path like /maps/place/Name/lat,lng
+  const cbllMatch = text.match(/[?&]cbll=(-?\d+\.?\d*),(-?\d+\.?\d*)/);
+  if (cbllMatch) {
+    const lat = Number.parseFloat(cbllMatch[1]);
+    const lng = Number.parseFloat(cbllMatch[2]);
+    if (isValidLatLng(lat, lng)) return { lat, lng };
+  }
+
   const pathCoordsMatch = text.match(
-    /\/(-?\d{1,3}\.\d{4,}),(-?\d{1,3}\.\d{4,})/,
+    /\/(-?\d{1,3}\.\d{3,}),(-?\d{1,3}\.\d{3,})/,
   );
   if (pathCoordsMatch) {
     const lat = Number.parseFloat(pathCoordsMatch[1]);
     const lng = Number.parseFloat(pathCoordsMatch[2]);
-    if (lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
-      return { lat, lng };
-    }
+    if (isValidLatLng(lat, lng)) return { lat, lng };
   }
 
   return null;
 }
 
-/** Extract place name from a Google Maps URL or HTML body */
+function isValidLatLng(lat: number, lng: number): boolean {
+  return (
+    !Number.isNaN(lat) &&
+    !Number.isNaN(lng) &&
+    lat >= -90 &&
+    lat <= 90 &&
+    lng >= -180 &&
+    lng <= 180 &&
+    !(lat === 0 && lng === 0)
+  );
+}
+
 function extractPlaceName(text: string): string | null {
-  // /maps/place/NAME/@...
-  const placeMatch = text.match(/\/maps\/place\/([^/@?#]+)/);
+  const placeMatch = text.match(/\/maps\/(?:place|search)\/([^/@?#]+)/);
   if (placeMatch) {
     try {
       return decodeURIComponent(placeMatch[1].replace(/\+/g, " ")).replace(
@@ -120,7 +133,6 @@ function extractPlaceName(text: string): string | null {
       return placeMatch[1];
     }
   }
-  // From title tag in HTML
   const titleMatch = text.match(/<title[^>]*>([^<]+)<\/title>/);
   if (titleMatch) {
     return titleMatch[1].replace(/ - Google Maps$/, "").trim();
@@ -128,64 +140,11 @@ function extractPlaceName(text: string): string | null {
   return null;
 }
 
-/** Parse a full Google Maps URL synchronously -- no network needed */
-function parseFullUrl(url: string): ParsedMapLocation {
-  const result = empty();
-
-  try {
-    const decoded = decodeURIComponent(url);
-    const coords =
-      extractCoordsFromString(url) || extractCoordsFromString(decoded);
-    if (coords) {
-      result.latitude = coords.lat;
-      result.longitude = coords.lng;
-      result.placeName = extractPlaceName(decoded) || extractPlaceName(url);
-      return result;
-    }
-
-    const parsed = new URL(url);
-    const cidParam = parsed.searchParams.get("cid");
-    const queryParam =
-      parsed.searchParams.get("q") || parsed.searchParams.get("query");
-
-    if (cidParam) {
-      result.error =
-        "This link doesn't contain coordinates. In Google Maps, tap on the store, then tap 'Share' and copy the link.";
-      return result;
-    }
-
-    if (queryParam) {
-      const coordMatch = queryParam.match(/^(-?\d+\.?\d*),\s*(-?\d+\.?\d*)$/);
-      if (coordMatch) {
-        result.latitude = Number.parseFloat(coordMatch[1]);
-        result.longitude = Number.parseFloat(coordMatch[2]);
-        return result;
-      }
-      result.placeName = queryParam.replace(/\+/g, " ");
-      result.error =
-        "This link has a place name but no coordinates. Tap the store pin in Google Maps, then tap Share to get the correct link.";
-      return result;
-    }
-
-    result.error =
-      "Couldn't read coordinates from this link. Try: tap the store in Google Maps \u2192 Share \u2192 copy the link.";
-    return result;
-  } catch {
-    result.error = "Invalid URL. Please paste a valid Google Maps link.";
-    return result;
-  }
-}
-
-/**
- * Extract coordinates from a proxy response's HTML body + final URL.
- * Tries many patterns: og:url, canonical, meta refresh, JS redirect,
- * any embedded Google Maps URL, and raw coordinate scan.
- */
 function extractCoordsFromHtml(
   body: string,
   finalUrl: string,
 ): { lat: number; lng: number; placeName: string | null } | null {
-  // 1. Try coords from the resolved final URL first
+  // 1. From the resolved final URL
   if (finalUrl) {
     const fromUrl = extractCoordsFromString(finalUrl);
     if (fromUrl) {
@@ -230,7 +189,55 @@ function extractCoordsFromHtml(
       };
   }
 
-  // 4. Meta refresh redirect
+  // 4. JSON-LD structured data with GeoCoordinates
+  const jsonLdMatches = [
+    ...body.matchAll(
+      /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi,
+    ),
+  ];
+  for (const match of jsonLdMatches) {
+    try {
+      const data = JSON.parse(match[1]);
+      const items = Array.isArray(data) ? data : [data];
+      for (const item of items) {
+        const geo = item?.geo || item?.location?.geo;
+        if (geo) {
+          const lat = Number.parseFloat(geo.latitude);
+          const lng = Number.parseFloat(geo.longitude);
+          if (isValidLatLng(lat, lng)) {
+            return { lat, lng, placeName: item.name || null };
+          }
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
+  // 5. Google embeds coordinates in JS arrays like [null,null,LAT,LNG]
+  const jsCoordPattern =
+    /[\[,]\s*(-?(?:90|[1-8]?\d)\.\d{4,})\s*,\s*(-?(?:180|1[0-7]\d|[1-9]?\d)\.\d{4,})\s*[,\]]/g;
+  for (const m of [...body.matchAll(jsCoordPattern)]) {
+    const lat = Number.parseFloat(m[1]);
+    const lng = Number.parseFloat(m[2]);
+    if (isValidLatLng(lat, lng)) {
+      return { lat, lng, placeName: extractPlaceName(body) };
+    }
+  }
+
+  // 6. JSON key patterns: "lat":40.7128,"lng":-74.006
+  const jsonLatLng = body.match(
+    /["'](?:lat(?:itude)?)["']\s*:\s*(-?\d+\.\d+)[\s\S]{0,30}?["'](?:lng|lon(?:g(?:itude)?)?)["']\s*:\s*(-?\d+\.\d+)/i,
+  );
+  if (jsonLatLng) {
+    const lat = Number.parseFloat(jsonLatLng[1]);
+    const lng = Number.parseFloat(jsonLatLng[2]);
+    if (isValidLatLng(lat, lng)) {
+      return { lat, lng, placeName: extractPlaceName(body) };
+    }
+  }
+
+  // 7. Meta refresh redirect
   const metaRefreshMatch = body.match(/content=["'][^"']*url=([^"'&\s]+)/i);
   if (metaRefreshMatch) {
     const redirectUrl = decodeURIComponent(metaRefreshMatch[1]);
@@ -243,13 +250,12 @@ function extractCoordsFromHtml(
       };
   }
 
-  // 5. JavaScript redirect patterns
-  const jsRedirectPatterns = [
+  // 8. JavaScript redirect patterns
+  for (const pattern of [
     /window\.location(?:\.href)?\s*=\s*["']([^"']+)["']/,
     /location\.replace\(["']([^"']+)["']\)/,
     /location\.assign\(["']([^"']+)["']\)/,
-  ];
-  for (const pattern of jsRedirectPatterns) {
+  ]) {
     const match = body.match(pattern);
     if (match) {
       const coords = extractCoordsFromString(match[1]);
@@ -262,11 +268,10 @@ function extractCoordsFromHtml(
     }
   }
 
-  // 6. Scan full body for embedded Google Maps URLs
-  const mapsUrlPattern =
-    /https:\/\/(?:www\.|maps\.)?google\.com\/maps[^\s"'<>\\)]+/g;
-  const urlMatches = body.match(mapsUrlPattern) || [];
-  for (const u of urlMatches) {
+  // 9. Scan body for embedded Google Maps URLs
+  for (const u of body.match(
+    /https:\/\/(?:www\.|maps\.)?google\.com\/maps[^\s"'<>\\)]+/g,
+  ) || []) {
     const coords = extractCoordsFromString(u);
     if (coords)
       return {
@@ -276,7 +281,7 @@ function extractCoordsFromHtml(
       };
   }
 
-  // 7. Direct coordinate scan in body
+  // 10. Direct coordinate scan in body
   const coords = extractCoordsFromString(body);
   if (coords)
     return {
@@ -288,162 +293,232 @@ function extractCoordsFromHtml(
   return null;
 }
 
-/** Resolve a short link by racing 4 proxy strategies in parallel */
-async function resolveShortLink(shortUrl: string): Promise<ParsedMapLocation> {
-  const TIMEOUT = 12000;
+function parseFullUrl(url: string): ParsedMapLocation {
+  const result = empty();
+  try {
+    let decoded = url;
+    try {
+      decoded = decodeURIComponent(url);
+    } catch {
+      /* ignore */
+    }
 
-  // Strategy 1: unshorten.me — purpose-built URL unshortener, returns final URL directly
+    const coords =
+      extractCoordsFromString(url) || extractCoordsFromString(decoded);
+    if (coords) {
+      result.latitude = coords.lat;
+      result.longitude = coords.lng;
+      result.placeName = extractPlaceName(decoded) || extractPlaceName(url);
+      return result;
+    }
+
+    const parsed = new URL(url);
+    const cidParam = parsed.searchParams.get("cid");
+    const queryParam =
+      parsed.searchParams.get("q") || parsed.searchParams.get("query");
+    const placeIdParam = parsed.searchParams.get("place_id");
+
+    if (cidParam || placeIdParam) {
+      result.error =
+        "This link doesn't contain coordinates. In Google Maps, tap on the store, then tap 'Share' and copy the link.";
+      return result;
+    }
+
+    if (queryParam) {
+      const coordMatch = queryParam.match(/^(-?\d+\.?\d*),\s*(-?\d+\.?\d*)$/);
+      if (coordMatch) {
+        const lat = Number.parseFloat(coordMatch[1]);
+        const lng = Number.parseFloat(coordMatch[2]);
+        if (isValidLatLng(lat, lng)) {
+          result.latitude = lat;
+          result.longitude = lng;
+          return result;
+        }
+      }
+      result.placeName = queryParam.replace(/\+/g, " ");
+      result.error =
+        "This link has a place name but no coordinates. Tap the store pin in Google Maps, then tap Share to get the correct link.";
+      return result;
+    }
+
+    result.error =
+      "Couldn't read coordinates from this link. Try: tap the store in Google Maps → Share → copy the link.";
+    return result;
+  } catch {
+    result.error = "Invalid URL. Please paste a valid Google Maps link.";
+    return result;
+  }
+}
+
+async function resolveShortLink(shortUrl: string): Promise<ParsedMapLocation> {
+  const TIMEOUT = 15000;
+
+  const makeResult = (
+    lat: number,
+    lng: number,
+    placeName: string | null,
+  ): ParsedMapLocation => ({
+    latitude: lat,
+    longitude: lng,
+    placeName,
+    isShortLink: false,
+    error: null,
+    needsManualEntry: false,
+  });
+
   const unshortenMe = fetch(
     `https://unshorten.me/api/v1/unshorten?url=${encodeURIComponent(shortUrl)}`,
     { signal: AbortSignal.timeout(TIMEOUT) },
   ).then(async (res) => {
-    if (!res.ok) throw new Error(`unshorten.me HTTP ${res.status}`);
+    if (!res.ok) throw new Error(`unshorten.me ${res.status}`);
     const json = (await res.json()) as {
       resolved_url?: string;
       requested_url?: string;
     };
     const resolvedUrl = json.resolved_url || json.requested_url || "";
-    if (!resolvedUrl) throw new Error("unshorten.me: no URL in response");
+    if (!resolvedUrl) throw new Error("no URL");
     const coords = extractCoordsFromString(resolvedUrl);
-    if (!coords) throw new Error("unshorten.me: no coords in resolved URL");
-    return {
-      latitude: coords.lat,
-      longitude: coords.lng,
-      placeName: extractPlaceName(resolvedUrl),
-      isShortLink: false,
-      error: null,
-    } as ParsedMapLocation;
+    if (!coords) throw new Error("no coords");
+    return makeResult(coords.lat, coords.lng, extractPlaceName(resolvedUrl));
   });
 
-  // Strategy 2: allorigins.win — fetches HTML and follows redirects, returns final URL
   const allOrigins = fetch(
     `https://api.allorigins.win/get?url=${encodeURIComponent(shortUrl)}`,
     { signal: AbortSignal.timeout(TIMEOUT) },
   ).then(async (res) => {
-    if (!res.ok) throw new Error(`allorigins HTTP ${res.status}`);
+    if (!res.ok) throw new Error(`allorigins ${res.status}`);
     const json = (await res.json()) as {
       contents: string;
       status: { url: string };
     };
-    const finalUrl = json?.status?.url ?? "";
-    const body = json?.contents ?? "";
-    const found = extractCoordsFromHtml(body, finalUrl);
-    if (!found) throw new Error("allorigins: no coordinates found");
-    return {
-      latitude: found.lat,
-      longitude: found.lng,
-      placeName: found.placeName,
-      isShortLink: false,
-      error: null,
-    } as ParsedMapLocation;
+    const found = extractCoordsFromHtml(
+      json?.contents ?? "",
+      json?.status?.url ?? "",
+    );
+    if (!found) throw new Error("no coords");
+    return makeResult(found.lat, found.lng, found.placeName);
   });
 
-  // Strategy 3: corsproxy.io — raw HTML proxy
+  const allOriginsRaw = fetch(
+    `https://api.allorigins.win/raw?url=${encodeURIComponent(shortUrl)}`,
+    { signal: AbortSignal.timeout(TIMEOUT) },
+  ).then(async (res) => {
+    const body = await res.text();
+    const found = extractCoordsFromHtml(body, res.url || "");
+    if (!found) throw new Error("no coords");
+    return makeResult(found.lat, found.lng, found.placeName);
+  });
+
   const corsProxy = fetch(
     `https://corsproxy.io/?${encodeURIComponent(shortUrl)}`,
     { signal: AbortSignal.timeout(TIMEOUT) },
   ).then(async (res) => {
-    if (!res.ok) throw new Error(`corsproxy HTTP ${res.status}`);
     const body = await res.text();
-    const canonicalMatch =
-      body.match(
-        /<link[^>]+rel=["']canonical["'][^>]+href=["']([^"']+)["']/i,
-      ) ||
-      body.match(/<link[^>]+href=["']([^"']+)["'][^>]+rel=["']canonical["']/i);
-    const finalUrl = canonicalMatch
-      ? decodeURIComponent(canonicalMatch[1])
-      : "";
-    const found = extractCoordsFromHtml(body, finalUrl);
-    if (!found) throw new Error("corsproxy: no coordinates found");
-    return {
-      latitude: found.lat,
-      longitude: found.lng,
-      placeName: found.placeName,
-      isShortLink: false,
-      error: null,
-    } as ParsedMapLocation;
+    const found = extractCoordsFromHtml(body, res.url || "");
+    if (!found) throw new Error("no coords");
+    return makeResult(found.lat, found.lng, found.placeName);
   });
 
-  // Strategy 4: codetabs proxy
   const codetabs = fetch(
     `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(shortUrl)}`,
     { signal: AbortSignal.timeout(TIMEOUT) },
   ).then(async (res) => {
-    if (!res.ok) throw new Error(`codetabs HTTP ${res.status}`);
+    if (!res.ok) throw new Error(`codetabs ${res.status}`);
     const body = await res.text();
     const found = extractCoordsFromHtml(body, "");
-    if (!found) throw new Error("codetabs: no coordinates found");
-    return {
-      latitude: found.lat,
-      longitude: found.lng,
-      placeName: found.placeName,
-      isShortLink: false,
-      error: null,
-    } as ParsedMapLocation;
+    if (!found) throw new Error("no coords");
+    return makeResult(found.lat, found.lng, found.placeName);
+  });
+
+  const thingProxy = fetch(
+    `https://thingproxy.freeboard.io/fetch/${shortUrl}`,
+    { signal: AbortSignal.timeout(TIMEOUT) },
+  ).then(async (res) => {
+    if (!res.ok) throw new Error(`thingproxy ${res.status}`);
+    const body = await res.text();
+    const found = extractCoordsFromHtml(body, "");
+    if (!found) throw new Error("no coords");
+    return makeResult(found.lat, found.lng, found.placeName);
+  });
+
+  const workersProxy = fetch(
+    `https://corsproxy.org/?url=${encodeURIComponent(shortUrl)}`,
+    { signal: AbortSignal.timeout(TIMEOUT) },
+  ).then(async (res) => {
+    const body = await res.text();
+    const found = extractCoordsFromHtml(body, res.url || "");
+    if (!found) throw new Error("no coords");
+    return makeResult(found.lat, found.lng, found.placeName);
   });
 
   try {
-    // Race all strategies — first one to succeed wins
-    const result = await Promise.any([
+    return await Promise.any([
       unshortenMe,
       allOrigins,
+      allOriginsRaw,
       corsProxy,
       codetabs,
+      thingProxy,
+      workersProxy,
     ]);
-    return result;
   } catch {
     return {
       latitude: null,
       longitude: null,
       placeName: null,
       isShortLink: true,
+      needsManualEntry: true,
       error:
-        "Could not read this link automatically. Try opening the link in your browser, then copy the full URL from the address bar. Or use the 'My Location' button when you're standing at the store.",
+        "Could not auto-read this link. Please enter the coordinates manually below (you can find them by opening the link in your browser), or use 'My Location' while standing at the store.",
     };
   }
 }
 
-/**
- * Parse any Google Maps URL or coordinate string.
- * Returns coordinates immediately for full URLs (no network call).
- * For short links (maps.app.goo.gl / goo.gl), races 4 proxies in parallel.
- */
+function isShortLink(url: string): boolean {
+  return (
+    /maps\.app\.goo\.gl/.test(url) ||
+    /goo\.gl\/maps/.test(url) ||
+    /^https?:\/\/goo\.gl\//.test(url) ||
+    /^https?:\/\/g\.co\//.test(url) ||
+    /^https?:\/\/maps\.google\.com\/maps\?/.test(url)
+  );
+}
+
 export async function parseGoogleMapsUrl(
   input: string,
 ): Promise<ParsedMapLocation> {
   const trimmed = input.trim();
   if (!trimmed) return empty();
 
-  // Plain coordinates: "40.7128,-74.0060"
   if (isPlainCoords(trimmed)) {
     const parts = trimmed.split(",");
+    const lat = Number.parseFloat(parts[0].trim());
+    const lng = Number.parseFloat(parts[1].trim());
+    if (isValidLatLng(lat, lng)) {
+      return { ...empty(), latitude: lat, longitude: lng };
+    }
+  }
+
+  let decoded = trimmed;
+  try {
+    decoded = decodeURIComponent(trimmed);
+  } catch {
+    /* ignore */
+  }
+  const direct =
+    extractCoordsFromString(trimmed) || extractCoordsFromString(decoded);
+  if (direct) {
     return {
       ...empty(),
-      latitude: Number.parseFloat(parts[0].trim()),
-      longitude: Number.parseFloat(parts[1].trim()),
+      latitude: direct.lat,
+      longitude: direct.lng,
+      placeName: extractPlaceName(decoded) || extractPlaceName(trimmed),
     };
   }
 
-  // Detect short links
-  const isShort =
-    /maps\.app\.goo\.gl/.test(trimmed) ||
-    /goo\.gl\/maps/.test(trimmed) ||
-    /^https?:\/\/goo\.gl\//.test(trimmed);
-
-  if (isShort) {
-    // Try to extract coords directly from the short URL first (rare but possible)
-    const direct = extractCoordsFromString(trimmed);
-    if (direct) {
-      return {
-        ...empty(),
-        latitude: direct.lat,
-        longitude: direct.lng,
-        placeName: extractPlaceName(trimmed),
-      };
-    }
+  if (isShortLink(trimmed)) {
     return resolveShortLink(trimmed);
   }
 
-  // Full URL — parse synchronously, no network needed
   return parseFullUrl(trimmed);
 }

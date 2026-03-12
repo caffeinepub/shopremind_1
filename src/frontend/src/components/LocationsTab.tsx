@@ -89,6 +89,24 @@ function StoreCard({ store, index }: StoreCardProps) {
 
 type LocationMode = "link" | "gps";
 
+function parseManualCoords(input: string): { lat: number; lng: number } | null {
+  const parts = input.split(",");
+  if (parts.length < 2) return null;
+  const lat = Number.parseFloat(parts[0].trim());
+  const lng = Number.parseFloat(parts[1].trim());
+  if (
+    Number.isNaN(lat) ||
+    Number.isNaN(lng) ||
+    lat < -90 ||
+    lat > 90 ||
+    lng < -180 ||
+    lng > 180
+  ) {
+    return null;
+  }
+  return { lat, lng };
+}
+
 function AddStoreDialog() {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
@@ -102,15 +120,22 @@ function AddStoreDialog() {
   const [gpsError, setGpsError] = useState<string | null>(null);
   const [parsed, setParsed] = useState<ParsedMapLocation | null>(null);
   const [isResolving, setIsResolving] = useState(false);
+  const [manualCoordsInput, setManualCoordsInput] = useState("");
+  const [manualParsed, setManualParsed] = useState<{
+    lat: number;
+    lng: number;
+  } | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Keep a ref to `name` so we can read its latest value inside the effect
-  // without listing it as a dependency (it would retrigger parsing on every keystroke).
   const nameRef = useRef(name);
   nameRef.current = name;
   const addStore = useAddStore();
 
   // Async parse whenever mapsUrl changes
   useEffect(() => {
+    // Reset manual entry when link changes
+    setManualCoordsInput("");
+    setManualParsed(null);
+
     if (!mapsUrl.trim()) {
       setParsed(null);
       setIsResolving(false);
@@ -137,6 +162,12 @@ function AddStoreDialog() {
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
   }, [mapsUrl]);
+
+  const handleManualCoordsChange = (val: string) => {
+    setManualCoordsInput(val);
+    const coords = parseManualCoords(val);
+    setManualParsed(coords);
+  };
 
   const handleGetLocation = () => {
     setGpsError(null);
@@ -165,23 +196,36 @@ function AddStoreDialog() {
     );
   };
 
+  // Use manualParsed when needsManualEntry is true and manual coords were entered
+  const effectiveLinkCoords =
+    parsed?.needsManualEntry && manualParsed
+      ? manualParsed
+      : parsed?.latitude !== null && parsed?.latitude !== undefined
+        ? { lat: parsed.latitude, lng: parsed.longitude! }
+        : null;
+
   const activeLat =
     locationMode === "link"
-      ? (parsed?.latitude ?? null)
+      ? (effectiveLinkCoords?.lat ?? null)
       : (gpsCoords?.lat ?? null);
   const activeLng =
     locationMode === "link"
-      ? (parsed?.longitude ?? null)
+      ? (effectiveLinkCoords?.lng ?? null)
       : (gpsCoords?.lng ?? null);
+
+  const linkCoordsReady =
+    locationMode === "link"
+      ? !isResolving &&
+        activeLat !== null &&
+        (parsed?.needsManualEntry ? manualParsed !== null : !parsed?.error)
+      : true;
 
   const canSubmit =
     name.trim() &&
     activeLat !== null &&
     activeLng !== null &&
     !isResolving &&
-    (locationMode === "link"
-      ? parsed && !parsed.error && parsed.latitude !== null
-      : true);
+    (locationMode === "link" ? linkCoordsReady : true);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -206,6 +250,8 @@ function AddStoreDialog() {
       setGpsCoords(null);
       setGpsError(null);
       setLocationMode("link");
+      setManualCoordsInput("");
+      setManualParsed(null);
       setOpen(false);
     } catch {
       toast.error("Failed to add store");
@@ -283,20 +329,25 @@ function AddStoreDialog() {
                     className={`text-xs px-3 py-2 rounded-lg font-medium ${
                       isResolving
                         ? "bg-muted text-muted-foreground"
-                        : parsed?.error ||
-                            (parsed !== null &&
-                              parsed.latitude === null &&
-                              !isResolving)
+                        : parsed?.error && !parsed?.needsManualEntry
                           ? "bg-destructive/10 text-destructive"
-                          : parsed !== null && parsed.latitude !== null
-                            ? "bg-primary/10 text-primary"
-                            : "bg-muted text-muted-foreground"
+                          : parsed?.needsManualEntry
+                            ? "bg-amber-500/10 text-amber-700 dark:text-amber-400"
+                            : parsed !== null && parsed.latitude !== null
+                              ? "bg-primary/10 text-primary"
+                              : "bg-muted text-muted-foreground"
                     }`}
                   >
                     {isResolving ? (
                       <span className="flex items-center gap-1.5">
                         <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />
                         Resolving link…
+                      </span>
+                    ) : parsed?.needsManualEntry ? (
+                      <span>
+                        Could not read this link automatically. Enter
+                        coordinates below, or use the &quot;My Location&quot;
+                        button while at the store.
                       </span>
                     ) : parsed?.error ? (
                       <span>{parsed.error}</span>
@@ -307,6 +358,46 @@ function AddStoreDialog() {
                         {parsed.longitude!.toFixed(6)}
                       </span>
                     ) : null}
+                  </div>
+                )}
+
+                {/* Manual coordinate entry — shown when auto-resolve fails */}
+                {parsed?.needsManualEntry && (
+                  <div className="space-y-1.5 pt-1">
+                    <Label className="text-xs font-semibold text-muted-foreground">
+                      Enter coordinates manually (e.g. 40.7128, -74.0060):
+                    </Label>
+                    <Input
+                      data-ocid="store.manual_coords.input"
+                      placeholder="latitude, longitude"
+                      value={manualCoordsInput}
+                      onChange={(e) => handleManualCoordsChange(e.target.value)}
+                      className="bg-background font-mono text-xs"
+                      autoComplete="off"
+                      autoCorrect="off"
+                      spellCheck={false}
+                    />
+                    {manualCoordsInput.trim() && (
+                      <div
+                        className={`text-xs px-3 py-2 rounded-lg font-medium ${
+                          manualParsed
+                            ? "bg-primary/10 text-primary"
+                            : "bg-destructive/10 text-destructive"
+                        }`}
+                      >
+                        {manualParsed ? (
+                          <span className="flex items-center gap-1.5">
+                            <Navigation className="h-3.5 w-3.5 shrink-0" />
+                            {manualParsed.lat.toFixed(6)},{" "}
+                            {manualParsed.lng.toFixed(6)}
+                          </span>
+                        ) : (
+                          <span>
+                            Invalid coordinates. Use format: 40.7128, -74.0060
+                          </span>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
               </>
